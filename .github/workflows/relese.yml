@@ -21,6 +21,19 @@ jobs:
         with:
           go-version: "1.26"
 
+      - name: Download dependencies
+        run: |
+            sudo apt-get update
+            sudo apt-get install -y \
+            libc6-dev \
+            libgl1-mesa-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libxxf86vm-dev \
+            libasound2-dev \
+            pkg-config
       - name: Build and copy Chip-8 binary for linux x86_64
         run: |
           mkdir -p dist
@@ -30,16 +43,6 @@ jobs:
         run: |
           mkdir -p dist
           GOOS=windows GOARCH=amd64 go build -o dist/chip8_windows_x86.exe cmd/chip8/main.go
-
-      - name: Build and copy Chip-8 binary for macOS x86_64
-        run: |
-          mkdir -p dist
-          GOOS=darwin GOARCH=amd64 go build -o dist/chip8_macos_x86 cmd/chip8/main.go
-
-      - name: Build and copy Chip-8 binary for macOS arm64
-        run: |
-          mkdir -p dist
-          GOOS=darwin GOARCH=arm64 go build -o dist/chip8_macos_arm64 cmd/chip8/main.go
         
 
       - name: Create GitHub Release
