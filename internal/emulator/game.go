@@ -34,28 +34,36 @@ func NewGame(cpu *cpu.CPU, display *display.Display, beepStream *myAudio.Beep, b
 }
 
 func (g *Game) Update() error {
-	keys := keyboard.PollKeys()
-	g.CPU.SetKeys(keys)
 	for i := 0; i < g.cyclesPerFrame; i++ {
 		if err := g.CPU.Cycle(); err != nil {
 			return err
 		}
 	}
 	g.CPU.TickTimers()
+
 	if g.CPU.SoundTimer > 0 {
 		g.beepStream.Activate()
 	} else {
 		g.beepStream.Deactivate()
 	}
-	g.Display.UpdateFromMemory(g.CPU.Display[:])
 
+	if g.CPU.DrawFlag {
+		g.Display.UpdateFromMemory(g.CPU.Display[:], g.CPU.HighRes) // pass resolution
+		g.CPU.DrawFlag = false
+	}
+
+	keys := keyboard.PollKeys()
+	g.CPU.SetKeys(keys)
 	return nil
+}
+
+func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
+	if g.CPU.HighRes {
+		return 128, 64
+	}
+	return 64, 32
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
 	g.Display.Draw(screen)
-}
-
-func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
-	return 64, 32
 }

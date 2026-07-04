@@ -8,12 +8,30 @@ func instructionToString(opcode uint16) string {
 	// nnn := opcode & 0x0FFF      // last 12 bits (nnn) value
 	switch opcode & 0xF000 {
 	case 0x0000:
+		if opcode&0xFFF0 == 0x00C0 { // 00CN: scroll display down N pixels
+			return "SCROLL DOWN " + hex(opcode&0x000F)
+		}
+		if opcode&0xFFF0 == 0x00D0 { // 00CN: scroll display down N pixels
+			return "SCROLL UP " + hex(opcode&0x000F)
+		}
 		switch opcode {
 		case 0x00E0: // Clear the display
 			return "CLS"
 
 		case 0x00EE: // Return from subroutine
 			return "RET"
+
+		case 0x00FB: // scroll right 4 (or 2 in lores w/ HalfScroll)
+			return "SCROLL RIGHT"
+
+		case 0x00FC: // scroll left 4 (or 2 in lores w/ HalfScroll)
+			return "SCROLL LEFT"
+
+		case 0x00FE: // low-res mode
+			return "LORES"
+
+		case 0x00FF: // high-res mode
+			return "HIRES"
 		}
 
 	case 0x1000: // Jump to address NNN
@@ -94,14 +112,14 @@ func instructionToString(opcode uint16) string {
 		switch nn {
 		case 0x07: // Set Vx = delay timer value
 			return "LD V" + hex((opcode>>8)&0xF) + ", DT"
+		case 0x0A: // Wait for a key press, store the value of the key in Vx
+			return "LD V" + hex((opcode>>8)&0xF) + ", K"
 		case 0x15: // Set delay timer = Vx
 			return "LD DT, V" + hex((opcode>>8)&0xF)
 		case 0x18: // Set sound timer = Vx
 			return "LD ST, V" + hex((opcode>>8)&0xF)
 		case 0x1E: // Set I = I + Vx
 			return "ADD I, V" + hex((opcode>>8)&0xF)
-		case 0x0A: // Wait for a key press, store the value of the key in Vx
-			return "LD V" + hex((opcode>>8)&0xF) + ", K"
 		case 0x29: // Set I = location of sprite for digit Vx
 			return "LD F, V" + hex((opcode>>8)&0xF)
 		case 0x33: // Store BCD representation of Vx in memory locations I, I+1, and I+2

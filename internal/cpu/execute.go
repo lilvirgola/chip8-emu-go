@@ -5,7 +5,7 @@ import (
 	"math/rand"
 )
 
-func (c *CPU) Execute(opcode uint16) error {
+func (c *CPU) DecodeAndExecute(opcode uint16) error {
 	x := (opcode & 0x0F00) >> 8 // x register index
 	y := (opcode & 0x00F0) >> 4 // y register index
 	n := opcode & 0x000F        // last nibble (n) value
@@ -14,6 +14,14 @@ func (c *CPU) Execute(opcode uint16) error {
 
 	switch opcode & 0xF000 {
 	case 0x0000:
+		if opcode&0xFFF0 == 0x00C0 { // 00CN: scroll display down N pixels
+			c.scrollDown(int(opcode & 0x000F))
+			break
+		}
+		if opcode&0xFFF0 == 0x00D0 { // 00CN: scroll display up N pixels
+			c.scrollUp(int(opcode & 0x000F))
+			break
+		}
 		switch opcode {
 		case 0x00E0: // Clear the display
 			for i := range c.Display {
@@ -27,6 +35,18 @@ func (c *CPU) Execute(opcode uint16) error {
 			}
 			c.SP--
 			c.PC = c.Stack[c.SP]
+
+		case 0x00FB: // scroll right 4 (or 2 in lores w/ HalfScroll)
+			c.scrollRight()
+
+		case 0x00FC: // scroll left 4 (or 2 in lores w/ HalfScroll)
+			c.scrollLeft()
+
+		case 0x00FE: // low-res mode
+			c.HighRes = false
+
+		case 0x00FF: // high-res mode
+			c.HighRes = true
 
 		}
 
@@ -72,12 +92,23 @@ func (c *CPU) Execute(opcode uint16) error {
 
 		case 1: // Vx = Vx OR Vy
 			c.V[x] |= c.V[y]
+			if c.Quirks.VFReset {
+				c.V[0xF] = 0
+			}
 
 		case 2: // Vx = Vx AND Vy
 			c.V[x] &= c.V[y]
+			c.V[x] |= c.V[y]
+			if c.Quirks.VFReset {
+				c.V[0xF] = 0
+			}
 
 		case 3: // Vx = Vx XOR Vy
 			c.V[x] ^= c.V[y]
+			c.V[x] |= c.V[y]
+			if c.Quirks.VFReset {
+				c.V[0xF] = 0
+			}
 
 		case 4: // Vx = Vx + Vy, set VF = carry (eg. addition with carry)
 			sum := uint16(c.V[x]) + uint16(c.V[y])
@@ -125,7 +156,7 @@ func (c *CPU) Execute(opcode uint16) error {
 				tmp = c.V[y]
 			}
 
-			c.V[0xF] = tmp & 0x80
+			c.V[0xF] = tmp >> 7
 			c.V[x] = tmp << 1
 		}
 
@@ -140,32 +171,53 @@ func (c *CPU) Execute(opcode uint16) error {
 		c.I = nnn
 
 	case 0xB000: // jump with offset: PC = NNN + V0
-		c.PC = nnn + uint16(c.V[0])
+		if c.Quirks.Jumping {
+			c.PC = nnn + uint16(c.V[x]) // Bxnn: use Vx (x = high nibble of nnn)
+		} else {
+			c.PC = nnn + uint16(c.V[0]) // Bnnn: use V0
+		}
 
 	case 0xC000: // Set Vx = random byte AND NN
 		c.V[x] = byte(rand.Uint32()&0xFF) & nn
 
 	case 0xD000: // draw sprite at (Vx, Vy) with width 8 pixels and height N pixels. Set VF = collision.
-		height := opcode & 0xF
-		xPos := int(c.V[x])
-		yPos := int(c.V[y])
+		if c.Quirks.DisplayWait && c.WaitingForFrame {
+			c.PC -= 2
+			return nil
+		}
+
+		w, h := c.screenWidth(), c.screenHeight()
+		xPos := int(c.V[x]) % w
+		yPos := int(c.V[y]) % h
 		c.V[0xF] = 0
-		for row := uint16(0); row < height; row++ {
-			sprite := c.Memory[c.I+row]
-			for col := 0; col < 8; col++ {
-				if (sprite & (0x80 >> col)) == 0 {
+
+		height := int(n)
+		spriteWidth := 8
+		if n == 0 && c.HighRes { // SuperChip big-sprite mode: 16x16
+			height = 16
+			spriteWidth = 16
+		}
+
+		for row := 0; row < height; row++ {
+			if !c.Quirks.Wrapping && yPos+row >= h {
+				break
+			}
+			var spriteRow uint16
+			if spriteWidth == 16 {
+				spriteRow = uint16(c.Memory[c.I+uint16(row*2)])<<8 | uint16(c.Memory[c.I+uint16(row*2+1)])
+			} else {
+				spriteRow = uint16(c.Memory[c.I+uint16(row)])
+			}
+			for col := 0; col < spriteWidth; col++ {
+				if spriteRow&(1<<(spriteWidth-1-col)) == 0 {
 					continue
 				}
-				xCoord := (xPos + col) % 64
-				yCoord := (yPos + int(row)) % 32
-				if !c.Quirks.Wrapping {
-					if xPos+col >= 64 || yPos+int(row) >= 32 {
-						continue
-					}
-					xCoord = xPos + col
-					yCoord = yPos + int(row)
+				if !c.Quirks.Wrapping && xPos+col >= w {
+					continue
 				}
-				index := yCoord*64 + xCoord
+				xCoord := (xPos + col) % w
+				yCoord := (yPos + row) % h
+				index := yCoord*128 + xCoord
 				if c.Display[index] {
 					c.V[0xF] = 1
 				}
@@ -173,6 +225,9 @@ func (c *CPU) Execute(opcode uint16) error {
 			}
 		}
 		c.DrawFlag = true
+		if c.Quirks.DisplayWait {
+			c.WaitingForFrame = true
+		}
 
 	case 0xE000:
 		switch nn {
@@ -190,6 +245,18 @@ func (c *CPU) Execute(opcode uint16) error {
 		switch nn {
 		case 0x07: // Set Vx = delay timer value
 			c.V[x] = c.DelayTimer
+		case 0x0A: // Fx0A: wait for a key press, store the key in Vx
+			pressed := false
+			for i := byte(0); i < 16; i++ {
+				if c.Keys[i] {
+					c.V[x] = i
+					pressed = true
+					break
+				}
+			}
+			if !pressed {
+				c.PC -= 2 // re-execute this instruction until a key is pressed
+			}
 		case 0x15: // Set delay timer = Vx
 			c.DelayTimer = c.V[x]
 		case 0x18: // Set sound timer = Vx
@@ -198,6 +265,8 @@ func (c *CPU) Execute(opcode uint16) error {
 			c.I += uint16(c.V[x])
 		case 0x29: // Set I = location of sprite for digit Vx
 			c.I = uint16(c.V[x]) * 5 // Each digit sprite is 5 bytes long
+		case 0x30: // Fx30: Set I = location of big sprite for digit Vx (SuperChip/XO-CHIP)
+			c.I = 0xA0 + uint16(c.V[x])*10 // each big-font digit is 10 bytes long
 		case 0x33: // Store BCD representation of Vx in memory locations I, I+1, and I+2
 			c.Memory[c.I] = c.V[x] / 100
 			c.Memory[c.I+1] = (c.V[x] / 10) % 10

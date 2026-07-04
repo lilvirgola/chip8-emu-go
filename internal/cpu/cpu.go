@@ -3,25 +3,29 @@ package cpu
 import "fmt"
 
 type CPU struct {
-	Memory     [4096]byte    // 4KB memory
-	V          [16]byte      // 16 general-purpose registers (V0 to VF)
-	I          uint16        // Index register
-	PC         uint16        // Program counter
-	SP         byte          // Stack pointer
-	Stack      [16]uint16    // Stack
-	DelayTimer byte          // Delay timer
-	SoundTimer byte          // Sound timer
-	Display    [64 * 32]bool // 64x32 monochrome display
-	Keys       [16]bool      // Key states
-	DrawFlag   bool          // Flag to indicate if the display needs to be redrawn
-	Quirks     Quirks        // Quirks for specific CHIP-8 implementations
-	Debug      Debug         // Debugging information
+	Memory          [65536]byte    // 64KB memory
+	V               [16]byte       // 16 general-purpose registers (V0 to VF)
+	I               uint16         // Index register
+	PC              uint16         // Program counter
+	SP              byte           // Stack pointer
+	Stack           [16]uint16     // Stack
+	DelayTimer      byte           // Delay timer
+	SoundTimer      byte           // Sound timer
+	Display         [128 * 64]bool // 128x64 monochrome display
+	HighRes         bool           // true if in high-resolution mode (128x64), false for low-resolution (64x32)
+	Keys            [16]bool       // Key states
+	DrawFlag        bool           // Flag to indicate if the display needs to be redrawn
+	Quirks          Quirks         // Quirks for specific CHIP-8 implementations
+	Debug           Debug          // Debugging information
+	WaitingForFrame bool           // set after a draw when DisplayWait quirk is on
 }
 
-func NewCPU() *CPU {
+func NewCPU(quirks Quirks) *CPU {
 	cpu := &CPU{
-		PC:     0x200,         // Programs start at memory location 0x200
-		Quirks: DefaultQuirks, // Use default quirks
+		PC:     0x200,  // Programs start at memory location 0x200
+		I:      0,      // Initialize index register
+		SP:     0,      // Initialize stack pointer
+		Quirks: quirks, // Use provided quirks
 	}
 	loadFont(cpu) // Load the font set into memory at 0x50
 	return cpu
@@ -30,7 +34,7 @@ func NewCPU() *CPU {
 func (c *CPU) Cycle() error { // emulates a single cycle of the CPU (fetch, decode, execute)
 	opcode := c.Fetch()
 
-	err := c.Execute(opcode)
+	err := c.DecodeAndExecute(opcode)
 
 	c.Debug.Cycle++
 
@@ -62,6 +66,7 @@ func (c *CPU) TickTimers() { // emulates the decrementing of the delay and sound
 	if c.SoundTimer > 0 {
 		c.SoundTimer--
 	}
+	c.WaitingForFrame = false // new frame has started, drawing allowed again
 }
 
 func (c *CPU) LoadROM(data []byte) { // loads a ROM into memory starting at 0x200
