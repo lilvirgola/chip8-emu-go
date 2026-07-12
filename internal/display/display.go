@@ -2,38 +2,105 @@ package display
 
 import "github.com/hajimehoshi/ebiten/v2"
 
+const (
+	loResW, loResH = 64, 32
+	hiResW, hiResH = 128, 64
+)
+
 type Display struct {
-	Pixels  [128 * 64]bool
+	Plane0  [hiResW * hiResH]bool
+	Plane1  [hiResW * hiResH]bool
 	HighRes bool
-	buf     []byte
+
+	Colors [4][3]byte // 0=neither, 1=plane0, 2=plane1, 3=both
+
+	buf  []byte
+	img  *ebiten.Image
+	imgW int
+	imgH int
 }
 
-func (d *Display) UpdateFromMemory(mem []bool, highRes bool) {
-	copy(d.Pixels[:], mem)
+func NewDisplay() *Display {
+	d := &Display{
+		Colors: [4][3]byte{
+			{0x00, 0x00, 0x00}, // background
+			{0xFF, 0xFF, 0xFF}, // plane0 only
+			{0x00, 0xFF, 0xFF}, // plane1 only
+			{0xFF, 0xFF, 0x00}, // both
+		},
+	}
+	d.setResolution(loResW, loResH)
+	return d
+}
+
+func (d *Display) setResolution(w, h int) {
+	if d.imgW == w && d.imgH == h {
+		return
+	}
+	d.imgW, d.imgH = w, h
+	d.buf = make([]byte, w*h*4)
+	d.img = ebiten.NewImage(w, h)
+}
+
+func (d *Display) UpdateFromMemory(plane0, plane1 []bool, highRes bool) {
+	copy(d.Plane0[:], plane0)
+	copy(d.Plane1[:], plane1)
 	d.HighRes = highRes
 }
 
-func (d *Display) Draw(screen *ebiten.Image) {
-	bounds := screen.Bounds()
-	w, h := bounds.Dx(), bounds.Dy()
-
-	need := w * h * 4
-	if len(d.buf) != need {
-		d.buf = make([]byte, need)
+func (d *Display) Update() {
+	w, h := loResW, loResH
+	if d.HighRes {
+		w, h = hiResW, hiResH
 	}
-
-	const stride = 128 // CPU.Display is always stored at 128-wide stride
+	d.setResolution(w, h)
 
 	for y := 0; y < h; y++ {
+		row := y * w
 		for x := 0; x < w; x++ {
-			on := d.Pixels[y*stride+x]
-			var v byte
-			if on {
-				v = 0xFF
+			idx := row + x
+			combo := 0
+			if d.Plane0[idx] {
+				combo |= 1
 			}
-			o := (y*w + x) * 4
-			d.buf[o], d.buf[o+1], d.buf[o+2], d.buf[o+3] = v, v, v, 0xFF
+			if d.Plane1[idx] {
+				combo |= 2
+			}
+			rgb := d.Colors[combo]
+			o := idx * 4
+			d.buf[o] = rgb[0]
+			d.buf[o+1] = rgb[1]
+			d.buf[o+2] = rgb[2]
+			d.buf[o+3] = 0xFF
 		}
 	}
-	screen.WritePixels(d.buf)
+
+	d.img.WritePixels(d.buf)
+}
+
+func (d *Display) Size() (int, int) {
+	return d.imgW, d.imgH
+}
+
+func (d *Display) Image() *ebiten.Image {
+	return d.img
+}
+
+func (d *Display) Draw(screen *ebiten.Image) {
+	d.Update()
+	w, h := d.Size()
+	sw, sh := screen.Bounds().Dx(), screen.Bounds().Dy()
+	opts := &ebiten.DrawImageOptions{}
+	opts.GeoM.Scale(float64(sw)/float64(w), float64(sh)/float64(h))
+	opts.Filter = ebiten.FilterNearest
+	screen.DrawImage(d.img, opts)
+}
+
+func (d *Display) DrawScaled(dst *ebiten.Image, opts *ebiten.DrawImageOptions) {
+	d.Update()
+	if opts.Filter == 0 {
+		opts.Filter = ebiten.FilterNearest
+	}
+	screen := dst
+	screen.DrawImage(d.img, opts)
 }

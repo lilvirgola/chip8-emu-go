@@ -1,6 +1,10 @@
 package cpu
 
-import "fmt"
+import (
+	myAudio "chip8/internal/audio"
+	"chip8/internal/display"
+	"fmt"
+)
 
 type CPU struct {
 	Memory          [65536]byte    // 64KB memory
@@ -8,45 +12,55 @@ type CPU struct {
 	I               uint16         // Index register
 	PC              uint16         // Program counter
 	SP              byte           // Stack pointer
-	Stack           [16]uint16     // Stack
+	Stack           [256]uint16    // Stack
 	DelayTimer      byte           // Delay timer
 	SoundTimer      byte           // Sound timer
-	Display         [128 * 64]bool // 128x64 monochrome display
-	HighRes         bool           // true if in high-resolution mode (128x64), false for low-resolution (64x32)
-	Keys            [16]bool       // Key states
-	DrawFlag        bool           // Flag to indicate if the display needs to be redrawn
-	Quirks          Quirks         // Quirks for specific CHIP-8 implementations
-	Debug           Debug          // Debugging information
-	WaitingForFrame bool           // set after a draw when DisplayWait quirk is on
+	Display         [128 * 64]bool // plane 0
+	Display2        [128 * 64]bool // plane 1
+	SelectedPlanes  byte           // bitmask: bit0=plane0, bit1=plane1
+	AudioPattern    [16]byte
+	Pitch           byte
+	HighRes         bool          // true if in high-resolution mode (128x64), false for low-resolution (64x32)
+	Keys            [16]bool      // Key states
+	DrawFlag        bool          // Flag to indicate if the display needs to be redrawn
+	Quirks          Quirks        // Quirks for specific CHIP-8 implementations
+	Debug           Debug         // Debugging information
+	WaitingForFrame bool          // set after a draw when DisplayWait quirk is on
+	Beep            *myAudio.Beep // Audio interface for beep sound
+	Flags           [16]byte      // RPL user flags (SCHIP/XO-CHIP extension)
+	DisplayRef      *display.Display
+	Opcode          uint16 // Last executed opcode (for debugging)
 }
 
-func NewCPU(quirks Quirks) *CPU {
+func NewCPU(quirks Quirks, display *display.Display) *CPU {
 	cpu := &CPU{
-		PC:     0x200,  // Programs start at memory location 0x200
-		I:      0,      // Initialize index register
-		SP:     0,      // Initialize stack pointer
-		Quirks: quirks, // Use provided quirks
+		PC:             0x200,  // Programs start at memory location 0x200
+		SelectedPlanes: 0x1,    // Default to plane 0
+		Quirks:         quirks, // Use provided quirks
+		DisplayRef:     display,
 	}
-	loadFont(cpu) // Load the font set into memory at 0x50
+	loadFont(cpu) // Load the font set into memory
 	return cpu
 }
 
 func (c *CPU) Cycle() error { // emulates a single cycle of the CPU (fetch, decode, execute)
 	opcode := c.Fetch()
+	c.Opcode = opcode // store the last executed opcode for debugging
 
-	err := c.DecodeAndExecute(opcode)
+	op, err := c.DecodeAndExecute(opcode)
 
 	c.Debug.Cycle++
 
 	if c.Debug.Enabled {
 		fmt.Printf(
-			"[CYCLE %d] PC=%03X OPCODE=%04X %-12s I=%03X V0=%02X V1=%02X V2=%02X\n",
+			"[CYCLE %7d] PC=%03X OPCODE=%04X %-14s I=%03X V0=%02X V1=%02X V2=%02X  %s\n",
 			c.Debug.Cycle,
 			c.PC-2,
 			opcode,
-			Disassemble(opcode),
+			op.FormatASM(opcode),
 			c.I,
 			c.V[0], c.V[1], c.V[2],
+			op.description,
 		)
 	}
 

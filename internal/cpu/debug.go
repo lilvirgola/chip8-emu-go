@@ -9,10 +9,6 @@ type Debug struct {
 	Cycle uint64
 }
 
-func Disassemble(opcode uint16) string {
-	return instructionToString(opcode)
-}
-
 func hex(v uint16) string {
 	return fmt.Sprintf("%X", v)
 }

@@ -3,11 +3,13 @@ package main
 import (
 	"fmt"
 	"log"
+	"time"
 
 	myAudio "chip8/internal/audio"
 	"chip8/internal/cpu"
 	"chip8/internal/display"
 	"chip8/internal/emulator"
+	"chip8/internal/octoconfig"
 	"chip8/internal/rom"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -15,11 +17,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const ebitenTPS = 60
+
 var (
-	platform     string
-	debugFlag    bool
-	stepFlag     bool
-	cyclesPerFrm int
+	platform       string
+	octoConfigPath string
+	debugFlag      bool
+	stepFlag       bool
+	cyclesPerFrm   int
 
 	// individual quirk overrides
 	vfReset     bool
@@ -28,6 +33,9 @@ var (
 	wrapping    bool
 	displayWait bool
 	jumping     bool
+
+	// test flags for development/debugging
+	testColors bool
 )
 
 func platformQuirks(name string) (cpu.Quirks, error) {
@@ -57,6 +65,7 @@ func main() {
 
 	rootCmd.Flags().StringVar(&platform, "platform", "vip",
 		"quirk preset: vip, chip48, schip-legacy, schip-modern, xochip")
+	rootCmd.Flags().StringVar(&octoConfigPath, "octo-config", "", "path to an Octo config file (overrides --platform quirks/colors)")
 	rootCmd.Flags().BoolVar(&debugFlag, "debug", false, "enable debug logging of executed opcodes")
 	rootCmd.Flags().BoolVar(&stepFlag, "step", false, "pause after each instruction (requires --debug)")
 	rootCmd.Flags().IntVar(&cyclesPerFrm, "cycles", 12, "CPU cycles executed per frame")
@@ -69,17 +78,70 @@ func main() {
 	rootCmd.Flags().BoolVar(&displayWait, "display-wait", false, "override: Dxyn waits for vblank")
 	rootCmd.Flags().BoolVar(&jumping, "jumping", false, "override: Bxnn uses Vx instead of Bnnn using V0")
 
+	// Test flags for development/debugging (TODO:fix this test)
+	rootCmd.Flags().BoolVar(&testColors, "test-colors", false, "test colors")
+
 	if err := rootCmd.Execute(); err != nil {
 		log.Fatal(err)
 	}
 }
 
 func run(cmd *cobra.Command, args []string) error {
+
+	if testColors {
+		displ := display.NewDisplay()
+		displ.HighRes = true
+		displ.Colors = [4][3]byte{
+			{0x00, 0x00, 0x00}, // black
+			{0xFF, 0x00, 0x00}, // red
+			{0x00, 0xFF, 0x00}, // green
+			{0x00, 0x00, 0xFF}, // blue
+		}
+
+		// Draw test patterns (these coordinates now match the 128x64 buffer)
+		// Red square (plane0 only) at top-left
+		for y := 10; y < 30; y++ {
+			for x := 10; x < 30; x++ {
+				displ.Plane0[y*128+x] = true
+			}
+		}
+
+		// Green square (plane1 only) at top-right
+		for y := 10; y < 30; y++ {
+			for x := 100; x < 120; x++ {
+				displ.Plane1[y*128+x] = true
+			}
+		}
+
+		// Blue square (both planes) at bottom
+		for y := 40; y < 60; y++ {
+			for x := 54; x < 74; x++ {
+				displ.Plane0[y*128+x] = true
+				displ.Plane1[y*128+x] = true
+			}
+		}
+
+		game := emulator.NewGame(nil, displ, nil, nil, cyclesPerFrm)
+		ebiten.SetWindowSize(1280, 640)
+		ebiten.SetWindowTitle("CHIP-8 Emulator - Color Test")
+		ebiten.SetTPS(ebitenTPS)
+		return ebiten.RunGame(game)
+	}
 	romPath := args[0]
 
 	quirks, err := platformQuirks(platform)
 	if err != nil {
 		return err
+	}
+	var displayColors *octoconfig.Config
+	if octoConfigPath != "" {
+		cfg, err := octoconfig.Load(octoConfigPath)
+		if err != nil {
+			return err
+		}
+		quirks = cfg.ToQuirks()
+		displayColors = &cfg
+		cyclesPerFrm = cfg.TickRate / ebitenTPS // convert instructions/sec to instructions/frame
 	}
 
 	// Apply explicit overrides only if the flag was actually passed on the CLI
@@ -110,19 +172,31 @@ func run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Printf("DEBUG: quirks = %+v\n", quirks)
-	c := cpu.NewCPU(quirks)
+	beep := myAudio.NewBeep()
+
+	audioContext := audio.NewContext(44100)
+
+	player, _ := audioContext.NewPlayer(beep)
+	player.SetBufferSize(50 * time.Millisecond)
+	player.SetVolume(0.5)
+	player.Play()
+	displ := display.NewDisplay()
+	if displayColors != nil {
+		displ.Colors = [4][3]byte{
+			{displayColors.Background.R, displayColors.Background.G, displayColors.Background.B},
+			{displayColors.Plane0.R, displayColors.Plane0.G, displayColors.Plane0.B},
+			{displayColors.Plane1.R, displayColors.Plane1.G, displayColors.Plane1.B},
+			{displayColors.Plane2.R, displayColors.Plane2.G, displayColors.Plane2.B},
+		}
+	}
+
+	c := cpu.NewCPU(quirks, displ)
 	c.Debug.Enabled = debugFlag
 	c.Debug.Step = stepFlag && debugFlag // step only makes sense with debug on
 	c.LoadROM(r.Data)
-
-	audioContext := audio.NewContext(44100)
-	beep := myAudio.NewBeep()
-	player, _ := audioContext.NewPlayer(beep)
-	player.Play()
-
-	game := emulator.NewGame(c, &display.Display{}, beep, player, cyclesPerFrm)
-	ebiten.SetWindowSize(640, 320)
+	game := emulator.NewGame(c, displ, beep, player, cyclesPerFrm)
+	ebiten.SetWindowSize(1280, 640)
 	ebiten.SetWindowTitle("CHIP-8 Emulator")
-	ebiten.SetTPS(60)
+	ebiten.SetTPS(ebitenTPS)
 	return ebiten.RunGame(game)
 }

@@ -49,7 +49,7 @@ var SuperchipModern = Quirks{
 	ShiftSetVX:  true,
 	IncrementI:  false,
 	Wrapping:    false, // clips instead of wraps
-	DisplayWait: false,
+	DisplayWait: true,
 	Jumping:     true,
 	HalfScroll:  false,
 }
@@ -60,9 +60,32 @@ var XOChip = Quirks{
 	ShiftSetVX:  false,
 	IncrementI:  true,
 	Wrapping:    true, // wraps instead of clipping
-	DisplayWait: false,
+	DisplayWait: true,
 	Jumping:     false,
 	HalfScroll:  false,
 }
 
 var DefaultQuirks = CosmacVIP
+
+func (q Quirks) IsXOChip() bool {
+	return q == XOChip
+}
+
+func (q Quirks) IsSuperchip() bool {
+	return q == SuperchipLegacy || q == SuperchipModern
+}
+
+func (q Quirks) IsSuperchipModern() bool {
+	return q == SuperchipModern
+}
+
+func (q Quirks) IsSuperchipLegacy() bool {
+	return q == SuperchipLegacy
+}
+func (q Quirks) IsChip48() bool {
+	return q == Chip48
+}
+
+func (q Quirks) IsCosmacVIP() bool {
+	return q == CosmacVIP
+}
