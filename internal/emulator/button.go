@@ -23,8 +23,13 @@ func (b *Button) Contains(x, y int) bool {
 func (b *Button) Update() {
 	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 		mx, my := ebiten.CursorPosition()
+		println("mouse:", mx, my, "button rect:", b.Rect.Min.X, b.Rect.Min.Y, b.Rect.Max.X, b.Rect.Max.Y)
+
 		if b.Contains(mx, my) {
-			b.OnClick()
+			println("clicked:", b.Label)
+			if b.OnClick != nil {
+				b.OnClick()
+			}
 		}
 	}
 }

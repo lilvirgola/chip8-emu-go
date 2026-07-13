@@ -2,6 +2,7 @@ package audio
 
 import (
 	"io"
+	"log/slog"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,7 @@ type Beep struct {
 }
 
 func NewBeep() *Beep {
+	slog.Debug("Beep initialized")
 	return &Beep{pitch: 64, acc: 0}
 }
 
@@ -34,22 +36,27 @@ func (b *Beep) SetPattern(pattern [16]byte) {
 	defer b.mu.Unlock()
 	b.pattern = pattern
 	b.hasPattern = true
+	slog.Debug("Beep pattern set", "pattern", pattern)
 }
 
 func (b *Beep) SetPitch(pitch byte) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.pitch = pitch
+	slog.Debug("Beep pitch set", "pitch", pitch)
 }
 
 func (b *Beep) playbackRate() float64 {
-	return 4000.0 * math.Pow(2, (float64(b.pitch)-64.0)/48.0)
+	playbackRate := 4000.0 * math.Pow(2, (float64(b.pitch)-64.0)/48.0)
+	slog.Debug("Beep playback rate calculated", "pitch", b.pitch, "rate", playbackRate)
+	return playbackRate
 }
 
 func (b *Beep) Read(out []byte) (int, error) {
 	// Ebiten expects 16-bit stereo PCM (4 bytes per frame)
 	frames := len(out) / 4
 	if frames == 0 {
+		slog.Debug("Beep Read called with empty output buffer")
 		return 0, nil
 	}
 
@@ -58,6 +65,7 @@ func (b *Beep) Read(out []byte) (int, error) {
 		for i := range out {
 			out[i] = 0
 		}
+		slog.Debug("Beep is inactive, outputting silence")
 		return len(out), nil
 	}
 
@@ -94,6 +102,7 @@ func (b *Beep) Read(out []byte) (int, error) {
 		b.mu.Lock()
 		b.acc = acc
 		b.mu.Unlock()
+		slog.Debug("Beep is active, outputting fallback square wave")
 		return len(out), nil
 	}
 
@@ -129,18 +138,21 @@ func (b *Beep) Read(out []byte) (int, error) {
 	b.phase = phase
 	b.acc = acc // Save acc just in case :)
 	b.mu.Unlock()
-
+	slog.Debug("Beep is active, outputting XO-CHIP pattern", "pattern", pattern, "phase", phase)
 	return len(out), nil
 }
 
 func (b *Beep) Err() error {
+	slog.Debug("Beep Err called, returning nil")
 	return nil
 }
 
 func (b *Beep) Activate() {
+	slog.Debug("Beep activated")
 	b.active.Store(true)
 }
 
 func (b *Beep) Deactivate() {
+	slog.Debug("Beep deactivated")
 	b.active.Store(false)
 }

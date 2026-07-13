@@ -7,18 +7,20 @@ import (
 	"chip8/internal/keyboard"
 	"fmt"
 	"image"
-	"image/color"
+	"io/fs"
 	"log"
+	"log/slog"
+	"sync"
 
 	myAudio "chip8/internal/audio"
 
 	cpuImpl "chip8/internal/cpu"
+	"chip8/internal/rom"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
-	"github.com/hajimehoshi/ebiten/v2/vector"
 	"golang.org/x/image/font/gofont/goregular"
 )
 
@@ -34,11 +36,21 @@ type Game struct {
 	lineHeight     float64
 	showDebug      bool
 
+	// rom loading
+	isRomLoaded bool
+	currentROM  []byte
+	romMu       sync.Mutex
+	pendingROM  []byte
+	loadingROM  bool
+	romLoadErr  error
+
 	// UI elements
-	debugToggleBtn *Button
+	debugToggleBtn  *Button
+	loadROMBtn      *Button
+	cpuTypeSelector *CPUTypeSelector
 }
 
-func NewGame(cpu *cpu.CPU, display *display.Display, beepStream *myAudio.Beep, beepPlayer *audio.Player, cyclesPerFrame int) *Game {
+func NewGame(cpu *cpu.CPU, display *display.Display, beepStream *myAudio.Beep, beepPlayer *audio.Player, cyclesPerFrame int, rom *rom.ROM) *Game {
 	if cyclesPerFrame <= 0 {
 		cyclesPerFrame = 12 // Default value if not provided or invalid
 	}
@@ -63,62 +75,107 @@ func NewGame(cpu *cpu.CPU, display *display.Display, beepStream *myAudio.Beep, b
 		cyclesPerFrame: cyclesPerFrame,
 		debugFace:      Face,
 		lineHeight:     lineHeight,
+		currentROM:     rom.Data,
+		isRomLoaded:    len(rom.Data) > 0,
 	}
 
 	g.debugToggleBtn = &Button{
-		Rect:  image.Rect(8, 8, 100, 32),
+		Rect:  image.Rect(0, 0, 120, 32),
 		Label: "Debug",
 		OnClick: func() {
 			g.showDebug = !g.showDebug
 		},
 	}
 
+	g.loadROMBtn = &Button{
+		Rect:  image.Rect(0, 0, 120, 32),
+		Label: "Load ROM",
+		OnClick: func() {
+			g.OnLoadROMClick()
+		},
+	}
+	quirks, names := cpuImpl.GetAvailableQuirks()
+	g.cpuTypeSelector = NewCPUTypeSelector(
+		quirks,
+		names,
+		func(t cpuImpl.Quirks) {
+			g.switchCPUType(t)
+		},
+	)
+	slog.Debug("Game initialized", "cyclesPerFrame", cyclesPerFrame, "quirks", cpu.Quirks, "romSize", len(rom.Data), "currentROM", len(g.currentROM))
 	return g
 }
 
 func (g *Game) Update() error {
 
-	sw, sh := ebiten.WindowSize()
-	g.layoutDebugButton(sw, sh)
+	sw, sh := display.WindowSizeW, display.WindowSizeH
+	g.layoutButtons(sw, sh)
 
 	g.debugToggleBtn.Update()
+	g.loadROMBtn.Update()
+	g.cpuTypeSelector.Update()
 
 	if inpututil.IsKeyJustPressed(ebiten.KeyF9) {
 		g.showDebug = !g.showDebug
 	}
 
-	for i := 0; i < g.cyclesPerFrame; i++ {
-		if err := g.CPU.Cycle(); err != nil {
-			return err
+	if files := ebiten.DroppedFiles(); files != nil {
+		g.romMu.Lock()
+		if !g.loadingROM {
+			g.loadingROM = true
+			go g.loadROMFromFS(files)
+		}
+		g.romMu.Unlock()
+	}
+
+	g.romMu.Lock()
+	rom := g.pendingROM
+	g.pendingROM = nil
+	err := g.romLoadErr
+	g.romLoadErr = nil
+	g.romMu.Unlock()
+
+	if err != nil {
+		slog.Error("ROM load error", "error", err)
+	}
+
+	if rom != nil {
+		g.currentROM = rom
+		g.loadROM(rom)
+	}
+	if g.isRomLoaded {
+		for i := 0; i < g.cyclesPerFrame; i++ {
+			if err := g.CPU.Cycle(); err != nil {
+				return err
+			}
+		}
+		g.CPU.TickTimers()
+
+		if g.CPU.SoundTimer > 0 {
+			g.beepStream.Activate()
+		} else {
+			g.beepStream.Deactivate()
+		}
+
+		if g.CPU.DrawFlag {
+			g.EmuDisplay.UpdateFromMemory(g.CPU.Display[:], g.CPU.Display2[:], g.CPU.HighRes)
+			g.CPU.DrawFlag = false
 		}
 	}
-	g.CPU.TickTimers()
-
-	if g.CPU.SoundTimer > 0 {
-		g.beepStream.Activate()
-	} else {
-		g.beepStream.Deactivate()
-	}
-
-	if g.CPU.DrawFlag {
-		g.EmuDisplay.UpdateFromMemory(g.CPU.Display[:], g.CPU.Display2[:], g.CPU.HighRes)
-		g.CPU.DrawFlag = false
-	}
-
 	keys := keyboard.PollKeys()
 	g.CPU.SetKeys(keys)
 	return nil
 }
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
-	return outsideWidth, outsideHeight
+	return display.WindowSizeW, display.WindowSizeH
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
 	emuW, emuH := g.EmuDisplay.Size()
 	sw, sh := screen.Bounds().Dx(), screen.Bounds().Dy()
 
-	g.layoutDebugButton(sw, sh)
+	g.layoutButtons(sw, sh)
 
 	scale := float64(sw) / float64(emuW)
 	if s2 := float64(sh) / float64(emuH); s2 < scale {
@@ -134,6 +191,19 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	g.EmuDisplay.DrawScaled(screen, op)
 
+	if !g.isRomLoaded {
+		msg := `Please load a ROM (.ch8/.c8/.bin) or use the "Load ROM" button`
+
+		drawCenteredTextBox(
+			screen,
+			msg,
+			g.debugFace,
+			g.lineHeight,
+			float64(screen.Bounds().Dx()),
+			float64(screen.Bounds().Dy()),
+		)
+	}
+
 	if g.showDebug {
 		g.drawDebugOverlay(screen, sw, sh)
 	}
@@ -142,60 +212,30 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	mx, my := ebiten.CursorPosition()
 	hovered := g.debugToggleBtn.Contains(mx, my)
 	g.debugToggleBtn.Draw(screen, g.debugFace, hovered)
+	hovered = g.loadROMBtn.Contains(mx, my)
+	g.loadROMBtn.Draw(screen, g.debugFace, hovered)
+	hovered = g.cpuTypeSelector.Contains(mx, my)
+	g.cpuTypeSelector.Draw(screen, g.debugFace, hovered)
 }
 
-func (g *Game) drawDebugOverlay(screen *ebiten.Image, w, h int) {
-	padding := 8.0
+func (g *Game) loadROMFromFS(files fs.FS) {
+	slog.Debug("Loading ROM from dropped files", "fs_type", fmt.Sprintf("%T", files))
 
-	// top-left
-	tl := fmt.Sprintf("FPS: %.1f\nPC: %04X\nI: %04X\nDT: %02X\nST: %02X",
-		ebiten.ActualFPS(), g.CPU.PC, g.CPU.I, g.CPU.DelayTimer, g.CPU.SoundTimer)
-	drawTextBox(screen, tl, g.debugFace, g.lineHeight, padding, padding, false)
+	err := fs.WalkDir(files, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			slog.Error("walk error", "error", err)
+			return err
+		}
 
-	// top-right
-	tr := fmt.Sprintf("V0: %02X \nV1: %02X \nV2: %02X \nV3: %02X \nV4: %02X \nV5: %02X \nV6: %02X \nV7: %02X \nV8: %02X \nV9: %02X \nVA: %02X \nVB: %02X \nVC: %02X \nVD: %02X \nVE: %02X \nVF: %02X",
-		g.CPU.V[0x0], g.CPU.V[0x1], g.CPU.V[0x2], g.CPU.V[0x3],
-		g.CPU.V[0x4], g.CPU.V[0x5], g.CPU.V[0x6], g.CPU.V[0x7],
-		g.CPU.V[0x8], g.CPU.V[0x9], g.CPU.V[0xA], g.CPU.V[0xB],
-		g.CPU.V[0xC], g.CPU.V[0xD], g.CPU.V[0xE], g.CPU.V[0xF])
-	drawTextBox(screen, tr, g.debugFace, g.lineHeight, float64(w)-padding, padding, true)
+		slog.Debug("ENTRY", "path", path, "isDir", d.IsDir())
 
-	// bottom-left
-	bl := fmt.Sprintf("SP: %02X", g.CPU.SP)
-	_, blH := text.Measure(bl, g.debugFace, g.debugFace.Metrics().HLineGap)
-	drawTextBox(screen, bl, g.debugFace, g.lineHeight, padding, float64(h)-blH-padding, false)
+		return nil
+	})
 
-	// bottom-right
-	br := fmt.Sprintf("Opcode: %04X", g.CPU.Opcode)
-	_, brH := text.Measure(br, g.debugFace, g.debugFace.Metrics().HLineGap)
-	drawTextBox(screen, br, g.debugFace, g.lineHeight, float64(w)-padding, float64(h)-brH-padding, true)
-}
-
-func (g *Game) layoutDebugButton(sw, sh int) {
-	btnW, btnH := 92, 32
-	margin := 16
-
-	x := (sw - btnW) / 2
-	y := sh - btnH - margin
-
-	g.debugToggleBtn.Rect = image.Rect(x, y, x+btnW, y+btnH)
-}
-
-func drawTextBox(dst *ebiten.Image, s string, face text.Face, lineHeight, x, y float64, alignRight bool) {
-	tw, th := text.Measure(s, face, lineHeight)
-	bx := x
-	if alignRight {
-		bx = x - tw
-	}
-
-	padding := 4.0
-	vector.FillRect(dst,
-		float32(bx-padding), float32(y-padding),
-		float32(tw+padding*2), float32(th+padding*2),
-		color.RGBA{0, 0, 0, 160}, false)
-
-	op := &text.DrawOptions{}
-	op.LineSpacing = lineHeight
-	op.GeoM.Translate(bx, y)
-	text.Draw(dst, s, face, op)
+	slog.Debug("walk finished", "error", err)
+	defer func() {
+		g.romMu.Lock()
+		g.loadingROM = false
+		g.romMu.Unlock()
+	}()
 }

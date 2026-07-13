@@ -32,7 +32,7 @@ go.work.sum
 # .vscode/
 
 roms/*
-dist
+dist/
 
 #ignore logs
 *.log

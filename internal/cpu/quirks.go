@@ -89,3 +89,21 @@ func (q Quirks) IsChip48() bool {
 func (q Quirks) IsCosmacVIP() bool {
 	return q == CosmacVIP
 }
+
+func GetAvailableQuirks() ([]Quirks, []string) {
+	quirks := []Quirks{
+		CosmacVIP,
+		Chip48,
+		SuperchipLegacy,
+		SuperchipModern,
+		XOChip,
+	}
+	names := []string{
+		"cosmac-vip",
+		"chip48",
+		"superchip-legacy",
+		"superchip-modern",
+		"xochip",
+	}
+	return quirks, names
+}

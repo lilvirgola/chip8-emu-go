@@ -4,6 +4,7 @@ import (
 	myAudio "chip8/internal/audio"
 	"chip8/internal/display"
 	"fmt"
+	"log/slog"
 )
 
 type CPU struct {
@@ -40,6 +41,7 @@ func NewCPU(quirks Quirks, display *display.Display) *CPU {
 		DisplayRef:     display,
 	}
 	loadFont(cpu) // Load the font set into memory
+	slog.Debug("CPU initialized", "quirks", quirks)
 	return cpu
 }
 
@@ -51,21 +53,10 @@ func (c *CPU) Cycle() error { // emulates a single cycle of the CPU (fetch, deco
 
 	c.Debug.Cycle++
 
-	if c.Debug.Enabled {
-		fmt.Printf(
-			"[CYCLE %7d] PC=%03X OPCODE=%04X %-14s I=%03X V0=%02X V1=%02X V2=%02X  %s\n",
-			c.Debug.Cycle,
-			c.PC-2,
-			opcode,
-			op.FormatASM(opcode),
-			c.I,
-			c.V[0], c.V[1], c.V[2],
-			op.description,
-		)
-	}
+	slog.Debug("CPU cycle executed", "cycle", c.Debug.Cycle, "pc", c.PC-2, "opcode", opcode, "instruction", op.FormatASM(opcode), "i", c.I, "v0", c.V[0], "v1", c.V[1], "v2", c.V[2], "description", op.description)
 
-	if c.Debug.Step {
-		fmt.Println("STEP MODE: press Enter to continue")
+	if c.Debug.Step { // TODO: add a better handle for step mode
+		slog.Debug("STEP MODE: press Enter to continue")
 		fmt.Scanln()
 	}
 
@@ -81,13 +72,16 @@ func (c *CPU) TickTimers() { // emulates the decrementing of the delay and sound
 		c.SoundTimer--
 	}
 	c.WaitingForFrame = false // new frame has started, drawing allowed again
+	slog.Debug("Timers ticked", "delayTimer", c.DelayTimer, "soundTimer", c.SoundTimer)
 }
 
 func (c *CPU) LoadROM(data []byte) { // loads a ROM into memory starting at 0x200
 	copy(c.Memory[0x200:], data)
 	c.PC = 0x200
+	slog.Debug("ROM loaded", "size", len(data))
 }
 
 func (c *CPU) SetKeys(keys [16]bool) { // updates the state of the keys (NOTE this should be called from the main loop to update the key states using the ebiten engine key state)
 	c.Keys = keys
+	slog.Debug("Keys updated", "keys", keys)
 }

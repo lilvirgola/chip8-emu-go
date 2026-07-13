@@ -1,0 +1,53 @@
+name: Build WASM and Sync to Hugo
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout WASM repo
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Build WASM binary
+        run: |
+          mkdir -p dist
+          GOOS=js GOARCH=wasm go build -o dist/game.wasm cmd/chip8/main.go
+
+      - name: Copy web assets
+        run: |
+          cp web/index.html dist/index.html
+          cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" dist/wasm_exec.js
+
+      - name: Checkout Hugo repo
+        uses: actions/checkout@v4
+        with:
+          repository: lilvirgola/my-portfolio
+          token: ${{ secrets.MY_PORTFOLIO_TOKEN }}
+          path: hugo
+
+      - name: Sync WASM into Hugo static folder
+        run: |
+          rm -rf hugo/static/apps/
+          mkdir -p hugo/static/apps/chip8
+          cp -r dist/* hugo/static/apps/chip8/
+
+      - name: Commit and push Hugo update
+        run: |
+          cd hugo
+          git config user.name "ci-bot"
+          git config user.email "ci@bot.local"
+
+          git add static/apps/chip8
+
+          git commit -m "update chip8 wasm from $GITHUB_REF_NAME" || echo "no changes"
+          git push

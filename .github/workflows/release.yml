@@ -43,6 +43,14 @@ jobs:
         run: |
           mkdir -p dist
           GOOS=windows GOARCH=amd64 go build -o dist/chip8_windows_x86.exe cmd/chip8/main.go
+
+      - name: Build copy and zip Chip-8 binary for wasm
+        run: |
+          mkdir -p dist
+          GOOS=js GOARCH=wasm go build -o dist/game.wasm cmd/chip8/main.go
+          cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" dist/wasm_exec.js
+          cp web/index.html dist/index.html
+          zip -j dist/chip8_wasm.zip dist/game.wasm dist/wasm_exec.js
         
 
       - name: Create GitHub Release

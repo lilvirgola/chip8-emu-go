@@ -5,10 +5,12 @@ go 1.26.4
 require (
 	github.com/hajimehoshi/ebiten/v2 v2.9.9
 	github.com/spf13/cobra v1.10.2
+	github.com/sqweek/dialog v0.0.0-20260123140253-64c163d53aac
 	golang.org/x/image v0.31.0
 )
 
 require (
+	github.com/TheTitanrain/w32 v0.0.0-20180517000239-4f5cfb03fabf // indirect
 	github.com/ebitengine/gomobile v0.0.0-20250923094054-ea854a63cce1 // indirect
 	github.com/ebitengine/hideconsole v1.0.0 // indirect
 	github.com/ebitengine/oto/v3 v3.4.0 // indirect

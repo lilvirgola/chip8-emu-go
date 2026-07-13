@@ -3,8 +3,9 @@ package display
 import "github.com/hajimehoshi/ebiten/v2"
 
 const (
-	loResW, loResH = 64, 32
-	hiResW, hiResH = 128, 64
+	loResW, loResH           = 64, 32
+	hiResW, hiResH           = 128, 64
+	WindowSizeW, WindowSizeH = 1280, 640
 )
 
 type Display struct {
@@ -43,9 +44,22 @@ func (d *Display) setResolution(w, h int) {
 }
 
 func (d *Display) UpdateFromMemory(plane0, plane1 []bool, highRes bool) {
-	copy(d.Plane0[:], plane0)
-	copy(d.Plane1[:], plane1)
 	d.HighRes = highRes
+
+	if highRes {
+		copy(d.Plane0[:], plane0)
+		copy(d.Plane1[:], plane1)
+		return
+	}
+
+	for y := 0; y < loResH; y++ {
+		srcRow := y * hiResW
+		dstRow := y * loResW
+		for x := 0; x < loResW; x++ {
+			d.Plane0[dstRow+x] = plane0[srcRow+x]
+			d.Plane1[dstRow+x] = plane1[srcRow+x]
+		}
+	}
 }
 
 func (d *Display) Update() {
@@ -103,4 +117,11 @@ func (d *Display) DrawScaled(dst *ebiten.Image, opts *ebiten.DrawImageOptions) {
 	}
 	screen := dst
 	screen.DrawImage(d.img, opts)
+}
+
+func (d *Display) Clear() {
+	for i := range d.Plane0 {
+		d.Plane0[i] = false
+		d.Plane1[i] = false
+	}
 }
